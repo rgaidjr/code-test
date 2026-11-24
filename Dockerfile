@@ -1,6 +1,6 @@
 # Lambda provides the Python runtime and local runtime-interface emulator.
 # CI builds a single linux/amd64 image; dataset bytes are verified before build.
-FROM public.ecr.aws/lambda/python:3.12@sha256:c1f818c2235d002529c955a6c0889a3d5c6de020205e37dff65039d73a453d78
+FROM public.ecr.aws/lambda/python:3.15@sha256:9ccea91653eed7f28f53c6653ad8398b2096d63b4e8f57b128af1c137d7c2718
 ARG APP_REVISION=local
 ARG DATASET_SHA256=local
 ENV PYTHONDONTWRITEBYTECODE=1 \
