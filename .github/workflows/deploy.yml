@@ -67,12 +67,17 @@ jobs:
           IMAGE_TAG="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           REGISTRY="${ECR_REPOSITORY_URI%%/*}"
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-          docker build --platform linux/amd64 --build-arg APP_REVISION="$GITHUB_SHA" --build-arg DATASET_SHA256="$DATASET_SHA" --tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load --build-arg APP_REVISION="$GITHUB_SHA" --build-arg DATASET_SHA256="$DATASET_SHA" --tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
           docker run --detach --rm --name philgeps-release --publish 9000:8080 "$ECR_REPOSITORY_URI:$IMAGE_TAG"
           trap 'docker logs philgeps-release; docker rm --force philgeps-release' EXIT
           python -m scripts.container_smoke --records "$RECORDS"
-          docker push "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+          docker push --platform linux/amd64 "$ECR_REPOSITORY_URI:$IMAGE_TAG"
           DIGEST=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)
+          MEDIA_TYPE=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids imageDigest="$DIGEST" --query 'imageDetails[0].imageManifestMediaType' --output text)
+          case "$MEDIA_TYPE" in
+            application/vnd.docker.distribution.manifest.v2+json|application/vnd.oci.image.manifest.v1+json) ;;
+            *) echo "Lambda requires a single-platform image manifest; received $MEDIA_TYPE"; exit 1 ;;
+          esac
           python -m scripts.scan_image --repository "${ECR_REPOSITORY_URI##*/}" --digest "$DIGEST" --region "$AWS_REGION"
           printf 'image_uri=%s@%s\n' "$ECR_REPOSITORY_URI" "$DIGEST" >> "$GITHUB_OUTPUT"
           printf 'dataset_sha256=%s\nrecords=%s\n' "$DATASET_SHA" "$RECORDS" >> "$GITHUB_OUTPUT"
