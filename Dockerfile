@@ -12,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AUTH_MODE=aws_iam
 COPY requirements.lock ${LAMBDA_TASK_ROOT}/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+# Runtime never installs RPMs. Remove package tooling and its vulnerable parser
+# libraries after dependency installation; keep the Lambda runtime unchanged.
+RUN rpm -e --nodeps microdnf libdnf rpm rpm-libs
 COPY agent.py philgeps.py mcp_server.py api.py lambda_handler.py cloud_runtime.py ${LAMBDA_TASK_ROOT}/
 COPY .build/DATASETS_PHILGEPS.csv ${LAMBDA_TASK_ROOT}/data/DATASETS_PHILGEPS.csv
 CMD ["lambda_handler.handler"]
