@@ -15,6 +15,8 @@ def main():
     parser.add_argument("--profile", required=True)
     parser.add_argument("--region")
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--oidc-subject-prefix", required=True,
+                        help="Exact sub_claim_prefix from the GitHub repository OIDC configuration API")
     parser.add_argument("--project", default="philgeps")
     parser.add_argument("--execute", action="store_true", help="Execute the validated change set")
     args = parser.parse_args()
@@ -34,12 +36,18 @@ def main():
     existing = next((item for page in cfn.get_paginator("list_stacks").paginate()
                      for item in page.get("StackSummaries", [])
                      if item["StackName"] == stack and item["StackStatus"] != "DELETE_COMPLETE"), None)
+    # Never reclassify this stack's own provider as an external provider on an
+    # update: changing the condition would delete the provider the roles trust.
+    if existing and existing["StackStatus"] != "REVIEW_IN_PROGRESS":
+        if stack_owns_oidc_provider(cfn, stack):
+            provider = ""
     operation = "UPDATE" if existing and existing["StackStatus"] != "REVIEW_IN_PROGRESS" else "CREATE"
     response = cfn.create_change_set(
         StackName=stack, ChangeSetName=f"bootstrap-{int(time.time())}", ChangeSetType=operation,
         TemplateBody=(ROOT / "infra/foundation.yaml").read_text(encoding="utf-8"),
         Parameters=[{"ParameterKey": key, "ParameterValue": value} for key, value in {
             "ProjectName": args.project, "GitHubRepository": args.repository,
+            "GitHubSubjectPrefix": args.oidc_subject_prefix,
             "ExistingOidcProviderArn": provider}.items()],
         Capabilities=["CAPABILITY_IAM"],
         Description="PhilGEPS deployment foundation, validated before execution",
@@ -70,6 +78,12 @@ def main():
     destination.parent.mkdir(exist_ok=True)
     destination.write_text(json.dumps(outputs, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(outputs, indent=2))
+
+
+def stack_owns_oidc_provider(cfn, stack):
+    return any(item["LogicalResourceId"] == "GitHubOidcProvider" and item["ResourceStatus"] != "DELETE_COMPLETE"
+               for page in cfn.get_paginator("list_stack_resources").paginate(StackName=stack)
+               for item in page.get("StackResourceSummaries", []))
 
 
 if __name__ == "__main__":

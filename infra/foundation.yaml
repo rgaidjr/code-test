@@ -21,6 +21,10 @@ Parameters:
     Type: String
     AllowedPattern: '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
     Description: GitHub owner/repository. No URL prefix.
+  GitHubSubjectPrefix:
+    Type: String
+    AllowedPattern: 'repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?'
+    Description: Exact sub_claim_prefix from the repository OIDC configuration API, including immutable IDs when enabled.
   ExistingOidcProviderArn:
     Type: String
     Default: ''
@@ -153,6 +157,7 @@ Resources:
   StagingDeployRole:
     Type: AWS::IAM::Role
     Properties:
+      Description: !Sub 'Staging deployment for ${GitHubRepository}'
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -164,7 +169,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:staging'
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:environment:staging'
       Policies:
         - PolicyName: BuildAndStage
           PolicyDocument:
@@ -203,6 +208,7 @@ Resources:
   ProductionDeployRole:
     Type: AWS::IAM::Role
     Properties:
+      Description: !Sub 'Production promotion for ${GitHubRepository}'
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -214,7 +220,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:production'
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:environment:production'
       Policies:
         - PolicyName: PromoteProduction
           PolicyDocument:

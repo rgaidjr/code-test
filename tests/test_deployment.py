@@ -7,10 +7,26 @@ from scripts import release
 from scripts.cloud_client import call
 from scripts.container_smoke import event
 from scripts.dataset import digest, validate
+from scripts.bootstrap import stack_owns_oidc_provider
 
 
 class MissingAlias(Exception):
     pass
+
+
+def test_bootstrap_preserves_the_existing_stack_owned_oidc_provider():
+    class Paginator:
+        def paginate(self, **kwargs):
+            assert kwargs == {"StackName": "foundation"}
+            return [{"StackResourceSummaries": [{"LogicalResourceId": "DatasetBucket", "ResourceStatus": "CREATE_COMPLETE"}]},
+                    {"StackResourceSummaries": [{"LogicalResourceId": "GitHubOidcProvider", "ResourceStatus": "CREATE_COMPLETE"}]}]
+
+    class Client:
+        def get_paginator(self, operation):
+            assert operation == "list_stack_resources"
+            return Paginator()
+
+    assert stack_owns_oidc_provider(Client(), "foundation") is True
 
 
 class FakeLambda:

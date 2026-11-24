@@ -113,7 +113,8 @@ and set `$providerArn` to the provider for
 
 ```powershell
 $providerArn = ""
-aws cloudformation deploy --region $region --stack-name "$project-foundation" --template-file infra/foundation.yaml --capabilities CAPABILITY_IAM --parameter-overrides "ProjectName=$project" "GitHubRepository=$repository" "ExistingOidcProviderArn=$providerArn"
+$subjectPrefix = "repo:rgaidjr@33531849/code-test@1470169626"
+aws cloudformation deploy --region $region --stack-name "$project-foundation" --template-file infra/foundation.yaml --capabilities CAPABILITY_IAM --parameter-overrides "ProjectName=$project" "GitHubRepository=$repository" "GitHubSubjectPrefix=$subjectPrefix" "ExistingOidcProviderArn=$providerArn"
 aws cloudformation describe-stacks --region $region --stack-name "$project-foundation" --query "Stacks[0].Outputs" --output table
 ```
 
@@ -124,7 +125,7 @@ bootstrap is an administrator operation, not a responsibility of the CI role.
 For the existing login-session profile, the SDK-based equivalent is:
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.bootstrap --profile agent-toolkit --repository rgaidjr/code-test --region ap-southeast-2 --execute
+.\.venv\Scripts\python.exe -m scripts.bootstrap --profile agent-toolkit --repository rgaidjr/code-test --oidc-subject-prefix "repo:rgaidjr@33531849/code-test@1470169626" --region ap-southeast-2 --execute
 ```
 
 Without `--execute`, it creates and validates a change set without provisioning
@@ -132,6 +133,11 @@ its resources. The foundation has already been created; do not repeat bootstrap
 unless you intend to update it. No durable CloudTrail trail was configured in
 the account during setup. Account management-event history is available, but
 long-term audit retention has not been enabled by this project.
+
+The subject prefix comes from GitHub's repository OIDC configuration API. New
+repositories include immutable owner and repository IDs; legacy name-only trust
+policies will fail. The bootstrap command preserves a provider already owned by
+the stack rather than accidentally changing its creation condition on update.
 
 ## 4. Upload and lock the dataset
 
