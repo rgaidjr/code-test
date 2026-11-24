@@ -51,7 +51,7 @@ jobs:
           for name in AWS_ROLE_ARN EXECUTION_ROLE_ARN OPENAI_SECRET_ARN ECR_REPOSITORY_URI; do
             if [ -z "${!name}" ]; then echo "Missing GitHub environment variable: $name"; exit 1; fi
           done
-      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -120,7 +120,7 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-dev.lock
-      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
