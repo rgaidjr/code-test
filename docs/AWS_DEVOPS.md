@@ -257,6 +257,13 @@ updates must regenerate both lockfiles before CI passes:
 .\.venv\Scripts\uv.exe pip compile --universal --generate-hashes --python-version 3.12 requirements-dev.txt --output-file requirements-dev.lock
 ```
 
+The runtime image removes unused RPM package installation tooling after Python
+dependencies are installed. ECR found HIGH findings in `rpm` and `rpm-libs`
+(CVE-2026-95520 and CVE-2026-95521), including an issue with no vendor fix yet.
+Removing those packages eliminates their vulnerable parsers from the runtime;
+the scan gate and full Lambda emulator smoke tests still apply. Install any
+future OS build dependencies before that removal step.
+
 ## 8. Call the deployed API
 
 Function URLs are HTTPS but require AWS IAM signing. Opening one anonymously in
@@ -357,11 +364,14 @@ The emulator accepts synthetic IAM event payloads for local testing; it is not
 a production authentication boundary. Bind its port only to localhost when
 working on an untrusted network.
 
-Current evidence: 49 tests passed and two live-model checks skipped; Ruff and
+Current evidence: 52 tests passed and two live-model checks skipped; Ruff and
 all CloudFormation templates passed; the locked runtime dependency audit found
 no known vulnerabilities. GitHub Actions syntax and expressions also passed
-actionlint validation. The AWS execution policy, real container build, image
-scan, GitHub workflows, deployed endpoint, and cloud smoke tests remain unrun.
+actionlint validation. GitHub CI and the real dataset container smoke tests
+passed. Foundation resources, OIDC authentication, private dataset upload and
+secret provisioning are verified in Sydney. The first complete ECR scan blocked
+release on HIGH base-image RPM findings; deployment and cloud endpoint smoke
+tests remain pending until the hardened runtime image passes that gate.
 
 ## Suggested learning exercises
 
