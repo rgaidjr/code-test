@@ -8,10 +8,49 @@ from scripts.cloud_client import call
 from scripts.container_smoke import event
 from scripts.dataset import digest, validate
 from scripts.bootstrap import stack_owns_oidc_provider
+from scripts.scan_image import scan
 
 
 class MissingAlias(Exception):
     pass
+
+
+def test_ecr_scan_is_started_once_and_missing_results_never_pass():
+    class ScanMissing(Exception):
+        pass
+
+    class Client:
+        class exceptions:
+            ScanNotFoundException = ScanMissing
+
+        def __init__(self):
+            self.reads = 0
+            self.starts = 0
+
+        def describe_image_scan_findings(self, **kwargs):
+            self.reads += 1
+            if self.reads <= 2:
+                raise ScanMissing()
+            return {"imageScanStatus": {"status": "COMPLETE"}, "imageScanFindings": {"findingSeverityCounts": {"LOW": 2}}}
+
+        def start_image_scan(self, **kwargs):
+            assert kwargs == {"repositoryName": "philgeps", "imageId": {"imageDigest": "sha256:example"}}
+            self.starts += 1
+
+    client = Client()
+    assert scan(client, "philgeps", "sha256:example", attempts=3, delay=0) == {"LOW": 2}
+    assert client.starts == 1
+    with pytest.raises(TimeoutError):
+        scan(Client(), "philgeps", "sha256:example", attempts=1, delay=0)
+
+
+def test_ecr_high_severity_findings_block_a_release():
+    class Client:
+        def describe_image_scan_findings(self, **kwargs):
+            return {"imageScanStatus": {"status": "COMPLETE"}, "imageScanFindings": {"findingSeverityCounts": {"HIGH": 1}}}
+
+    with pytest.raises(RuntimeError, match="HIGH/CRITICAL"):
+        scan(Client(), "philgeps", "digest", attempts=1, delay=0)
 
 
 def test_bootstrap_preserves_the_existing_stack_owned_oidc_provider():
