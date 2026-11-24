@@ -222,6 +222,10 @@ then assumes the staging IAM role via OIDC. It downloads the pinned dataset,
 builds one real image, tests it with Lambda's local emulator, pushes it to ECR,
 and blocks the release if the image scan reports HIGH or CRITICAL findings.
 An incomplete/failed scan also blocks deployment; it is not silently skipped.
+The image is built and pushed explicitly as `linux/amd64`, without provenance
+or SBOM index entries. A manifest-type check rejects OCI indexes before scanning
+or deployment. CI starts basic scans explicitly on this repository instead of
+depending on the deprecated repository-level `scanOnPush` setting.
 
 The release script updates a CloudFormation stack containing the function,
 14-day log group, and alarms. This changes `$LATEST`, which receives no live
@@ -344,7 +348,7 @@ With Docker installed, prepare the local real CSV before building:
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.dataset local
-docker build --platform linux/amd64 -t philgeps-local .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load -t philgeps-local .
 docker run --rm -p 9000:8080 philgeps-local
 ```
 

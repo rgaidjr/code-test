@@ -68,7 +68,7 @@ jobs:
       - name: Build and test using a synthetic dataset, without AWS credentials
         run: |
           python -m scripts.dataset sample
-          docker build --platform linux/amd64 --tag philgeps-ci .
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load --tag philgeps-ci .
           docker run --detach --rm --name philgeps-ci --publish 9000:8080 philgeps-ci
           trap 'docker logs philgeps-ci; docker rm --force philgeps-ci' EXIT
           python -m scripts.container_smoke --records 1
