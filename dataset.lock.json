@@ -1,7 +1,7 @@
 {
-  "bucket": null,
+  "bucket": "philgeps-223662763464-ap-southeast-2-datasets",
   "key": "datasets/12b6a9d1da51720e950f734a1aed2f14644b3aae022e4cf04c1f4ccb0c1bcd1d/DATASETS_PHILGEPS.csv",
-  "version_id": null,
+  "version_id": "xnTPTuMoZKSs1FVBo6apgUdoRyWvLb85",
   "sha256": "12b6a9d1da51720e950f734a1aed2f14644b3aae022e4cf04c1f4ccb0c1bcd1d",
   "bytes": 124793223,
   "records": 196202,
