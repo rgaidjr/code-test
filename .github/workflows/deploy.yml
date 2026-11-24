@@ -1,0 +1,130 @@
+name: Build, stage, and promote
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote_production:
+        description: Promote the image tested in this run to production
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
+  PROJECT_NAME: ${{ vars.PROJECT_NAME || 'philgeps' }}
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  staging:
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    concurrency:
+      group: philgeps-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_uri: ${{ steps.image.outputs.image_uri }}
+      dataset_sha256: ${{ steps.image.outputs.dataset_sha256 }}
+      records: ${{ steps.image.outputs.records }}
+    env:
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      EXECUTION_ROLE_ARN: ${{ vars.EXECUTION_ROLE_ARN }}
+      OPENAI_SECRET_ARN: ${{ vars.OPENAI_SECRET_ARN }}
+      ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Require deployment configuration
+        run: |
+          for name in AWS_ROLE_ARN EXECUTION_ROLE_ARN OPENAI_SECRET_ARN ECR_REPOSITORY_URI; do
+            if [ -z "${!name}" ]; then echo "Missing GitHub environment variable: $name"; exit 1; fi
+          done
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-staging
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Download the exact dataset version and verify its checksum
+        run: python -m scripts.dataset download --region "$AWS_REGION"
+      - name: Build once, smoke-test, and publish the immutable image
+        id: image
+        run: |
+          DATASET_SHA=$(python -c 'import json; print(json.load(open("dataset.lock.json"))["sha256"])')
+          RECORDS=$(python -c 'import json; print(json.load(open("dataset.lock.json"))["records"])')
+          IMAGE_TAG="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REGISTRY="${ECR_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+          docker build --platform linux/amd64 --build-arg APP_REVISION="$GITHUB_SHA" --build-arg DATASET_SHA256="$DATASET_SHA" --tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
+          docker run --detach --rm --name philgeps-release --publish 9000:8080 "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+          trap 'docker logs philgeps-release; docker rm --force philgeps-release' EXIT
+          python -m scripts.container_smoke --records "$RECORDS"
+          docker push "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+          DIGEST=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)
+          python -m scripts.scan_image --repository "${ECR_REPOSITORY_URI##*/}" --digest "$DIGEST" --region "$AWS_REGION"
+          printf 'image_uri=%s@%s\n' "$ECR_REPOSITORY_URI" "$DIGEST" >> "$GITHUB_OUTPUT"
+          printf 'dataset_sha256=%s\nrecords=%s\n' "$DATASET_SHA" "$RECORDS" >> "$GITHUB_OUTPUT"
+      - name: Deploy and smoke-test staging
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.image_uri }}
+          DATASET_SHA: ${{ steps.image.outputs.dataset_sha256 }}
+          RECORDS: ${{ steps.image.outputs.records }}
+        run: |
+          python -m scripts.release deploy --environment staging --project "$PROJECT_NAME" --image-uri "$IMAGE_URI" --execution-role-arn "$EXECUTION_ROLE_ARN" --secret-arn "$OPENAI_SECRET_ARN" --dataset-sha256 "$DATASET_SHA" --revision "$GITHUB_SHA" --region "$AWS_REGION" --records "$RECORDS" > deployment-outputs-staging.json
+          cat deployment-outputs-staging.json
+          printf '### Staging release\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat deployment-outputs-staging.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+  production:
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_production && github.ref == 'refs/heads/main'
+    needs: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: philgeps-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      EXECUTION_ROLE_ARN: ${{ vars.EXECUTION_ROLE_ARN }}
+      OPENAI_SECRET_ARN: ${{ vars.OPENAI_SECRET_ARN }}
+      IMAGE_URI: ${{ needs.staging.outputs.image_uri }}
+      DATASET_SHA: ${{ needs.staging.outputs.dataset_sha256 }}
+      RECORDS: ${{ needs.staging.outputs.records }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-production
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Promote the exact image tested in staging
+        run: |
+          python -m scripts.release deploy --environment production --project "$PROJECT_NAME" --image-uri "$IMAGE_URI" --execution-role-arn "$EXECUTION_ROLE_ARN" --secret-arn "$OPENAI_SECRET_ARN" --dataset-sha256 "$DATASET_SHA" --revision "$GITHUB_SHA" --region "$AWS_REGION" --records "$RECORDS" > deployment-outputs-production.json
+          cat deployment-outputs-production.json
+          printf '### Production release\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat deployment-outputs-production.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"

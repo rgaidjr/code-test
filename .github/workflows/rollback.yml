@@ -1,0 +1,46 @@
+name: Roll back a release
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+      version:
+        description: Published numeric Lambda version from a previous successful release
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: philgeps-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'philgeps' }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      TARGET_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-rollback
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Test the selected version and move the alias back
+        run: python -m scripts.release rollback --function "$PROJECT_NAME-$TARGET_ENVIRONMENT" --version "$TARGET_VERSION" --region "$AWS_REGION"

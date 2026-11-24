@@ -1,0 +1,74 @@
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_LIVE_TESTS: '0'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Validate GitHub Actions definitions with a pinned linter
+        run: |
+          mkdir -p .build
+          curl --fail --location --output .build/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          printf '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  .build/actionlint.tar.gz\n' | sha256sum --check
+          tar -xzf .build/actionlint.tar.gz -C .build actionlint
+          .build/actionlint -color -shellcheck=
+      - name: Lint, test, and validate infrastructure
+        run: |
+          python -m ruff check .
+          python -m pytest -q
+          cfn-lint infra/*.yaml
+      - name: Run the approved infrastructure security rules
+        run: |
+          curl --fail --location --output .build/cfn-guard.tar.gz https://github.com/aws-cloudformation/cloudformation-guard/releases/download/3.3.0/cfn-guard-v3-x86_64-linux-latest.tar.gz
+          printf 'ecf25d586c98057836fac28a8e498569f6daded8f386fd13327c82a4daa45d6e  .build/cfn-guard.tar.gz\n' | sha256sum --check
+          mkdir -p .build/guard-bin
+          tar -xzf .build/cfn-guard.tar.gz -C .build/guard-bin
+          GUARD=$(find .build/guard-bin -type f -name cfn-guard | head -n 1)
+          test -n "$GUARD"
+          "$GUARD" validate --rules infra/guard --data infra/foundation.yaml --output-format json
+          "$GUARD" validate --rules infra/guard --data infra/application.yaml --output-format json
+      - name: Check lockfiles are current
+        run: |
+          uv pip compile --universal --generate-hashes --python-version 3.12 requirements.txt --output-file requirements.lock --quiet
+          uv pip compile --universal --generate-hashes --python-version 3.12 requirements-dev.txt --output-file requirements-dev.lock --quiet
+          git diff --exit-code -- requirements.lock requirements-dev.lock
+      - name: Audit runtime dependencies
+        run: python -m pip_audit --require-hashes -r requirements.lock
+  container:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Build and test using a synthetic dataset, without AWS credentials
+        run: |
+          python -m scripts.dataset sample
+          docker build --platform linux/amd64 --tag philgeps-ci .
+          docker run --detach --rm --name philgeps-ci --publish 9000:8080 philgeps-ci
+          trap 'docker logs philgeps-ci; docker rm --force philgeps-ci' EXIT
+          python -m scripts.container_smoke --records 1

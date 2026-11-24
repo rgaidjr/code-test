@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==9.2.0
+ruff==0.17.6
+pip-audit==2.10.1
+cfn-lint==1.61.0
+uv==0.13.9
+botocore[crt]==1.44.10

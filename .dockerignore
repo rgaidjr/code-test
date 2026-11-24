@@ -1,0 +1,11 @@
+*
+!requirements.txt
+!requirements.lock
+!agent.py
+!philgeps.py
+!mcp_server.py
+!api.py
+!lambda_handler.py
+!cloud_runtime.py
+!.build/
+!.build/DATASETS_PHILGEPS.csv

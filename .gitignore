@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+.aws/
+node_modules/
+.cache/
+.build/
+DATASETS_PHILGEPS.csv
+*.sqlite3
+.ruff_cache/
+deployment-outputs*.json

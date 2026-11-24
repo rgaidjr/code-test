@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Optional monthly AWS cost alerts. Alerts notify; they do not stop spending.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref:
+      - at: docs/AWS_DEVOPS.md
+        has: Budget notifications and retained-resource teardown behavior
+        scope: shared
+Parameters:
+  ProjectName: {Type: String, Default: philgeps}
+  Email: {Type: String, AllowedPattern: '[^@\s]+@[^@\s]+\.[^@\s]+'}
+  MonthlyUsd: {Type: Number, Default: 20, MinValue: 1}
+Resources:
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${ProjectName}-learning-monthly'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: !Ref MonthlyUsd, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref Email}]
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref Email}]

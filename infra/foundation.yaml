@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: PhilGEPS learning platform - retained data, registry, secrets and GitHub OIDC identities.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref:
+      - at: docs/AWS_DEVOPS.md
+        has: Shared resource ownership, OIDC boundaries, data retention, and release architecture
+        scope: shared
+    must:
+      - Retain private dataset versions, tagged images, and secrets during stack removal.
+      - GitHub trust remains scoped to the selected repository and deployment environment.
+      - API keys are never stored in template parameters or GitHub variables.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: philgeps
+    AllowedPattern: '[a-z][a-z0-9-]{2,30}'
+  GitHubRepository:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+    Description: GitHub owner/repository. No URL prefix.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: Reuse the account GitHub OIDC provider if it already exists.
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, '']
+Resources:
+  DatasetBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${ProjectName}-${AWS::AccountId}-${AWS::Region}-datasets'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  DatasetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DatasetBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DatasetBucket.Arn
+              - !Sub '${DatasetBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref ProjectName
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Remove only untagged images after 14 days","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":14},"action":{"type":"expire"}}]}'
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LambdaImageRetrieval
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-*'
+  StagingSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '${ProjectName}/staging/openai'
+      Description: Set OPENAI_API_KEY separately; never commit a key in a template.
+      SecretString: '{"OPENAI_API_KEY":"","OPENAI_MODEL":"gpt-6.2-astra"}'
+  ProductionSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '${ProjectName}/production/openai'
+      Description: Production model credentials, independent of staging.
+      SecretString: '{"OPENAI_API_KEY":"","OPENAI_MODEL":"gpt-6.2-astra"}'
+  StagingExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-staging:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref StagingSecret
+  ProductionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-production:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ProductionSecret
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+  StagingDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:staging'
+      Policies:
+        - PolicyName: BuildAndStage
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage, ecr:GetRepositoryPolicy, ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload, ecr:PutImage, ecr:DescribeImages, ecr:DescribeImageScanFindings]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: s3:GetObjectVersion
+                Resource: !Sub '${DatasetBucket.Arn}/datasets/*'
+              - Effect: Allow
+                Action: [cloudformation:CreateStack, cloudformation:UpdateStack, cloudformation:DescribeStacks, cloudformation:DescribeStackEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-staging/*'
+              - Effect: Allow
+                Action: [lambda:CreateFunction, lambda:DeleteFunction, lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:UpdateFunctionCode, lambda:UpdateFunctionConfiguration, lambda:PublishVersion, lambda:ListVersionsByFunction, lambda:GetAlias, lambda:CreateAlias, lambda:UpdateAlias, lambda:DeleteAlias, lambda:CreateFunctionUrlConfig, lambda:GetFunctionUrlConfig, lambda:UpdateFunctionUrlConfig, lambda:DeleteFunctionUrlConfig, lambda:InvokeFunctionUrl, lambda:InvokeFunction, lambda:TagResource, lambda:UntagResource]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-staging'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-staging:*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt StagingExecutionRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: lambda.amazonaws.com}}
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:DeleteLogGroup, logs:PutRetentionPolicy, logs:TagResource, logs:UntagResource, logs:PutMetricFilter, logs:DeleteMetricFilter, logs:DescribeMetricFilters]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-staging*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:DescribeAlarms]
+                Resource: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-staging-*'
+  ProductionDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:production'
+      Policies:
+        - PolicyName: PromoteProduction
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [cloudformation:CreateStack, cloudformation:UpdateStack, cloudformation:DescribeStacks, cloudformation:DescribeStackEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-production/*'
+              - Effect: Allow
+                Action: [lambda:CreateFunction, lambda:DeleteFunction, lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:UpdateFunctionCode, lambda:UpdateFunctionConfiguration, lambda:PublishVersion, lambda:ListVersionsByFunction, lambda:GetAlias, lambda:CreateAlias, lambda:UpdateAlias, lambda:DeleteAlias, lambda:CreateFunctionUrlConfig, lambda:GetFunctionUrlConfig, lambda:UpdateFunctionUrlConfig, lambda:DeleteFunctionUrlConfig, lambda:InvokeFunctionUrl, lambda:InvokeFunction, lambda:TagResource, lambda:UntagResource]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-production'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-production:*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:GetRepositoryPolicy, ecr:DescribeImages]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt ProductionExecutionRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: lambda.amazonaws.com}}
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:DeleteLogGroup, logs:PutRetentionPolicy, logs:TagResource, logs:UntagResource, logs:PutMetricFilter, logs:DeleteMetricFilter, logs:DescribeMetricFilters]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-production*'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:DescribeAlarms]
+                Resource: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ProjectName}-production-*'
+Outputs:
+  DatasetBucket: {Value: !Ref DatasetBucket}
+  RepositoryUri: {Value: !GetAtt Repository.RepositoryUri}
+  StagingDeployRoleArn: {Value: !GetAtt StagingDeployRole.Arn}
+  ProductionDeployRoleArn: {Value: !GetAtt ProductionDeployRole.Arn}
+  StagingExecutionRoleArn: {Value: !GetAtt StagingExecutionRole.Arn}
+  ProductionExecutionRoleArn: {Value: !GetAtt ProductionExecutionRole.Arn}
+  StagingSecretArn: {Value: !Ref StagingSecret}
+  ProductionSecretArn: {Value: !Ref ProductionSecret}

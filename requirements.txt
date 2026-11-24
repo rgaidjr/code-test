@@ -1,0 +1,8 @@
+openai==3.58.0
+mcp[cli]==2.3.0
+jsonschema==4.26.0
+python-dotenv==1.2.4
+fastapi==0.165.0
+uvicorn==0.54.0
+mangum==0.22.0
+boto3==1.44.10
