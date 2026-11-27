@@ -68,7 +68,7 @@ jobs:
           REGISTRY="${ECR_REPOSITORY_URI%%/*}"
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load --build-arg APP_REVISION="$GITHUB_SHA" --build-arg DATASET_SHA256="$DATASET_SHA" --tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
-          docker run --detach --rm --name philgeps-release --publish 9000:8080 "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+          docker run --detach --rm --memory 512m --memory-swap 512m --name philgeps-release --publish 9000:8080 "$ECR_REPOSITORY_URI:$IMAGE_TAG"
           trap 'docker logs philgeps-release; docker rm --force philgeps-release' EXIT
           python -m scripts.container_smoke --records "$RECORDS"
           docker push --platform linux/amd64 "$ECR_REPOSITORY_URI:$IMAGE_TAG"

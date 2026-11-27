@@ -373,6 +373,13 @@ secret provisioning are verified in Sydney. The first complete ECR scan blocked
 release on HIGH base-image RPM findings; deployment and cloud endpoint smoke
 tests remain pending until the hardened runtime image passes that gate.
 
+The staging retry on November 27 reached Lambda creation, which rejected the
+original 2,048 MB configuration with a maximum-memory constraint of 512 MB.
+The template now uses 512 MB, and both fixture and real-data container smoke
+tests run with a 512 MB memory limit and no extra swap. Lambda cold-start timing
+and dataset queries still require validation on the deployed function, since
+the emulator does not reproduce Lambda's CPU allocation.
+
 ## Suggested learning exercises
 
 1. Deliberately break a test in a branch and watch CI block it.

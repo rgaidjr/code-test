@@ -33,7 +33,8 @@ Resources:
       Architectures: [x86_64]
       Code: {ImageUri: !Ref ImageUri}
       Role: !Ref ExecutionRoleArn
-      MemorySize: 2048
+      # Current account provisioning limit; CI smoke tests enforce this budget.
+      MemorySize: 512
       Timeout: 180
       EphemeralStorage: {Size: 1024}
       Environment:
